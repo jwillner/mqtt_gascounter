@@ -41,14 +41,25 @@ ESP32-C6 basierter Gaszähler mit WiFi, MQTT und OLED-Display.
 | GPIO8 | WS2812 NeoPixel |
 | GPIO9 | BOOT Button |
 
-### Verdrahtung OLED
+### Verdrahtung
 
 ```
-OLED VCC  →  3.3V
-OLED GND  →  GND
-OLED SDA  →  GPIO0
-OLED SCL  →  GPIO1
+ESP32-C6 SuperMini          OLED SSD1306
+┌─────────────────┐         ┌──────────┐
+│             3.3V├─────────┤VCC       │
+│              GND├─────────┤GND       │
+│            GPIO0├─────────┤SDA       │
+│            GPIO1├─────────┤SCL       │
+│                 │         └──────────┘
+│            GPIO3├────────────┤ Reed-Sensor / Hallsensor
+│              GND├────────────┤ (anderer Pol)
+│                 │
+│            GPIO8│  WS2812 (onboard)
+│            GPIO9│  BOOT Button (onboard)
+└─────────────────┘
 ```
+
+> Sensor: Ein Pol an GPIO3, anderer Pol an GND. GPIO3 ist intern auf HIGH gezogen (INPUT_PULLUP), ein Puls zieht auf LOW.
 
 ---
 
