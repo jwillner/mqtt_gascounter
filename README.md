@@ -29,7 +29,8 @@ ESP32-C6 basierter Gaszähler mit WiFi, MQTT und OLED-Display.
 | Mikrocontroller | ESP32-C6 SuperMini |
 | Display | 0.96" OLED SSD1306 (I2C, 128×64) |
 | LED | WS2812 onboard (GPIO8) |
-| Sensor | Reed-Kontakt / Hallsensor |
+| Sensor | Reed-Kontakt / [Hall-Sensor analog – AZ-Delivery](https://www.az-delivery.de/en/products/copy-of-hall-sensor-modul-analog) |
+| Temperatursensoren | [DS18B20 mit 3m Kabel – AZ-Delivery (2er Set)](https://www.az-delivery.de/en/products/2er-set-ds18b20-mit-3m-kabel) |
 
 ### Pinbelegung
 
@@ -37,7 +38,8 @@ ESP32-C6 basierter Gaszähler mit WiFi, MQTT und OLED-Display.
 |---|---|
 | GPIO0 | OLED SDA |
 | GPIO1 | OLED SCL |
-| GPIO3 | Sensor (Puls, INPUT_PULLUP) |
+| GPIO3 | Sensor (Puls, analog) |
+| GPIO4 | DS18B20 1-Wire (bis zu 3 Sensoren parallel) |
 | GPIO8 | WS2812 NeoPixel |
 | GPIO9 | BOOT Button |
 
@@ -54,12 +56,18 @@ ESP32-C6 SuperMini          OLED SSD1306
 │            GPIO3├────────────┤ Reed-Sensor / Hallsensor
 │              GND├────────────┤ (anderer Pol)
 │                 │
+│            GPIO4├──────┬─────────────┤ DS18B20 #1 (DQ)
+│             3.3V├──┐   │  ┌──────────┤ DS18B20 #2 (DQ)
+│              GND├──┤   │  │  ┌───────┤ DS18B20 #3 (DQ)
+│                 │  │   │  │  │
+│                 │  └─[4.7kΩ]─┘ (Pull-up zwischen 3.3V und DQ)
+│                 │
 │            GPIO8│  WS2812 (onboard)
 │            GPIO9│  BOOT Button (onboard)
 └─────────────────┘
 ```
 
-> Sensor: Ein Pol an GPIO3, anderer Pol an GND. GPIO3 ist intern auf HIGH gezogen (INPUT_PULLUP), ein Puls zieht auf LOW.
+> DS18B20: Alle Sensoren parallel an GPIO4 (DQ), VCC und GND. Ein 4,7 kΩ Pull-up-Widerstand zwischen 3.3V und DQ ist erforderlich. Bis zu 3 Sensoren werden automatisch erkannt.
 
 ---
 
@@ -79,7 +87,11 @@ ESP32-C6 SuperMini          OLED SSD1306
   "hour_kwh": 0.105,
   "pulses_total": 11757,
   "pulses_hour": 10,
-  "rssi": -67
+  "adc": 3306,
+  "rssi": -67,
+  "temperature_0": 29.25,
+  "temperature_1": 25.81,
+  "temperature_2": 27.44
 }
 ```
 
@@ -150,3 +162,5 @@ make monitor  # serieller Monitor
 | Adafruit NeoPixel | WS2812 RGB-LED |
 | Adafruit SSD1306 | OLED Display |
 | Adafruit GFX Library | Grafik-Primitives |
+| OneWire | 1-Wire Kommunikation |
+| DallasTemperature | DS18B20 Temperatursensoren |
