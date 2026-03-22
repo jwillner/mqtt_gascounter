@@ -2,9 +2,9 @@
 
 ESP32-C6 basierter Gaszähler mit WiFi, MQTT und OLED-Display.
 
-| ESP32-C6 SuperMini | OLED 0.96" |
-|---|---|
-| ![ESP32-C6 SuperMini](images/esp32-c6-supermini.jpg) | ![OLED 0.96"](images/oled097zoll.jpg) |
+| ESP32-C6 SuperMini | OLED 0.96" | Hall-Sensor analog | DS18B20 Temperatursensor |
+|---|---|---|---|
+| ![ESP32-C6 SuperMini](images/esp32-c6-supermini.jpg) | ![OLED 0.96"](images/oled097zoll.jpg) | ![Hall-Sensor](images/ky-035-magnetischer-hall-sensor-modul-analog-892360.webp) | ![DS18B20](images/3m-kabel-ds18b20-digitaler-edelstahl-temperatursensor-temperaturfuhler-wasserdicht-337201.webp) |
 
 ---
 
