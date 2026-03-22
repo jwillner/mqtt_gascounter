@@ -1,6 +1,6 @@
 # MQTT GasCounter
 
-ESP32-C6 basierter Gaszähler mit WiFi, MQTT und OLED-Display.
+ESP32-C6 basierter Gaszähler mit WiFi, MQTT, OLED-Display und **DS18B20 Temperaturmessung** (bis zu 3 Sensoren).
 
 | ESP32-C6 SuperMini | OLED 0.96" | Hall-Sensor analog | DS18B20 Temperatursensor |
 |---|---|---|---|
@@ -8,11 +8,59 @@ ESP32-C6 basierter Gaszähler mit WiFi, MQTT und OLED-Display.
 
 ---
 
+## DS18B20 Temperatursensoren
+
+Bis zu **3 DS18B20 Sensoren** werden automatisch erkannt und über den 1-Wire Bus an **GPIO4** ausgelesen. Die Temperaturen werden auf dem OLED angezeigt und per MQTT publiziert.
+
+### Bezug
+
+[DS18B20 mit 3m Kabel – AZ-Delivery (2er Set)](https://www.az-delivery.de/en/products/2er-set-ds18b20-mit-3m-kabel)
+
+### Elektrische Anbindung
+
+```
+ESP32-C6           DS18B20 #1    DS18B20 #2    DS18B20 #3
+                   ┌─────────┐   ┌─────────┐   ┌─────────┐
+3.3V ──┬───────────┤VCC      ├───┤VCC      ├───┤VCC      │
+       │           │         │   │         │   │         │
+       └──[4.7kΩ]──┤DQ       ├───┤DQ       ├───┤DQ       │
+GPIO4 ─────────────┘         │   │         │   │         │
+GND ───────────────┬─────────┤   ├─────────┤   ├─────────┤
+                   │   GND   │   │   GND   │   │   GND   │
+                   └─────────┘   └─────────┘   └─────────┘
+```
+
+> **Wichtig:** Ein **4,7 kΩ Pull-up-Widerstand** zwischen 3.3V und DQ (GPIO4) ist zwingend erforderlich. Alle Sensoren hängen parallel am selben Bus.
+
+### Libraries
+
+| Library | Installation |
+|---|---|
+| [OneWire](https://github.com/PaulStoffregen/OneWire) | `arduino-cli lib install "OneWire"` |
+| [DallasTemperature](https://github.com/milesburton/Arduino-Temperature-Control-Library) | `arduino-cli lib install "DallasTemperature"` |
+
+> **Hinweis ESP32-C6:** Die OneWire-Library (v2.3.8) benötigt einen Patch für den ESP32-C6. In `OneWire/util/OneWire_direct_gpio.h` alle Vorkommen von `#if CONFIG_IDF_TARGET_ESP32C3` durch `#if CONFIG_IDF_TARGET_ESP32C3 || CONFIG_IDF_TARGET_ESP32C6` ersetzen.
+
+### MQTT Ausgabe
+
+Die Temperaturen erscheinen im `gas_counter/state` Payload:
+
+```json
+{
+  "temperature_0": 29.25,
+  "temperature_1": 25.81,
+  "temperature_2": 27.44
+}
+```
+
+---
+
 ## Features
 
-- Pulszählung per Reed-Kontakt / Hallsensor (GPIO3, Interrupt + Debounce)
+- Pulszählung per Reed-Kontakt / [Hall-Sensor analog](https://www.az-delivery.de/en/products/copy-of-hall-sensor-modul-analog) (GPIO3, analog mit Hysterese)
 - Berechnung von Verbrauch in **kWh** und **m³**
 - MQTT-Publish alle 10 Sekunden sowie sofort bei jedem Puls
+- **DS18B20 Temperaturmessung** – bis zu 3 Sensoren parallel (GPIO4, 1-Wire)
 - **Persistenz** des Gesamtzählers im NVS (überlebt Reboot)
 - **Stunden-Rollover**: Verbrauch pro Stunde wird getrennt gezählt
 - **OLED-Anzeige** (SSD1306 128×64) mit Echtzeit-Werten
@@ -43,7 +91,7 @@ ESP32-C6 basierter Gaszähler mit WiFi, MQTT und OLED-Display.
 | GPIO8 | WS2812 NeoPixel |
 | GPIO9 | BOOT Button |
 
-### Verdrahtung
+### Vollständige Verdrahtung
 
 ```
 ESP32-C6 SuperMini          OLED SSD1306
@@ -66,8 +114,6 @@ ESP32-C6 SuperMini          OLED SSD1306
 │            GPIO9│  BOOT Button (onboard)
 └─────────────────┘
 ```
-
-> DS18B20: Alle Sensoren parallel an GPIO4 (DQ), VCC und GND. Ein 4,7 kΩ Pull-up-Widerstand zwischen 3.3V und DQ ist erforderlich. Bis zu 3 Sensoren werden automatisch erkannt.
 
 ---
 
