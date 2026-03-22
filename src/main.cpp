@@ -14,20 +14,19 @@
 //
 
 // -------- WLAN ----------
-static const char* WIFI_SSID = "RouterJoachimWillner";
-static const char* WIFI_PASS = "JoWiBu-456";
+static const char* WIFI_SSID = "YOUR_WIFI_SSID";
+static const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
 
 // -------- MQTT ----------
-static const char* MQTT_HOST = "192.168.1.16";
+static const char* MQTT_HOST = "YOUR_MQTT_BROKER_IP";
 static const uint16_t MQTT_PORT = 1883;
 
 static const char* MQTT_CLIENT_ID   = "gas_counter_esp32c6";
 static const char* MQTT_TOPIC_STATE = "gas_counter/state";
-static const char* MQTT_TOPIC_GPIO2 = "gas_counter/gpio2";
 static const char* MQTT_TOPIC_AVAIL = "gas_counter/availability";
 
 // -------- Hardware ----------
-static const uint8_t PIN_SENSOR   = 3;        // Sensor input (pulse)
+static const uint8_t PIN_SENSOR   = 3;        // Sensor input (analog)
 static const uint8_t PIN_NEOPIXEL = 8;        // WS2812 data pin
 static const uint8_t PIN_BUTTON   = BOOT_PIN; // BOOT button
 static const uint8_t NUM_PIXELS   = 1;
@@ -44,7 +43,11 @@ static const uint32_t DISPLAY_INTERVAL_MS = 2000UL;
 // -------- Gas Parameters ----------
 static const float PULSE_VOLUME_M3 = 0.01f;  // 1 pulse = 0.01 m³
 static const float GAS_KWH_PER_M3  = 10.5f;  // adjust for your gas conversion!
-static const uint32_t DEBOUNCE_US  = 20000UL; // 20ms debounce in ISR
+
+// -------- Analog Sensor Threshold (0..4095) ----------
+// Hysterese: unter LOW = ausgelöst, über HIGH = zurückgesetzt
+static const uint16_t ADC_THRESHOLD_LOW  = 1000;  // Puls erkannt
+static const uint16_t ADC_THRESHOLD_HIGH = 2000;  // Sensor zurückgesetzt
 
 // -------- Timing ----------
 static const uint32_t WIFI_TIMEOUT_MS     = 20000UL;
@@ -96,13 +99,16 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 bool oledOk = false;
 
-// Pulse counters (ISR)
-volatile uint32_t pulses_total   = 0;
-volatile uint32_t pulses_hour    = 0;
-volatile uint32_t pending_pulses = 0;
-volatile uint32_t last_isr_us    = 0;
+// Pulse counters
+uint32_t pulses_total   = 0;
+uint32_t pulses_hour    = 0;
+uint32_t pending_pulses = 0;
 
-volatile bool red_pulse_pending = false;
+bool red_pulse_pending = false;
+
+// Analog sensor state
+uint16_t adcValue       = 0;
+bool sensorTriggered    = false;
 
 // LED pulse timing
 bool redActive    = false;
@@ -113,9 +119,6 @@ uint32_t hourStartMs = 0;
 
 // persistence offset (kWh)
 float total_kwh_offset = 0.0f;
-
-// GPIO2 state tracking
-int last_gpio_state = -1;
 
 // connectivity state
 bool mqttOnline = false;
@@ -148,24 +151,27 @@ static inline void setLed(uint8_t r, uint8_t g, uint8_t b) {
 
 //
 // ============================================================
-// ===================== ISR ==================================
+// ===================== ANALOG SENSOR ========================
 // ============================================================
 //
+// Hysterese-Schwellwert: verhindert Mehrfachzählung pro Puls.
+// Sensor gilt als ausgelöst wenn ADC < ADC_THRESHOLD_LOW,
+// zurückgesetzt wenn ADC > ADC_THRESHOLD_HIGH.
+//
 
-void IRAM_ATTR isrPulse() {
-  uint32_t now = (uint32_t)micros();
+void handleSensorAnalog() {
+  adcValue = analogRead(PIN_SENSOR);
 
-  if ((uint32_t)(now - last_isr_us) < DEBOUNCE_US) {
-    return;
+  if (!sensorTriggered && adcValue < ADC_THRESHOLD_LOW) {
+    sensorTriggered = true;
+    pulses_total++;
+    pulses_hour++;
+    pending_pulses++;
+    red_pulse_pending = true;
+    Serial.printf("Puls! ADC=%u  total=%u\r\n", adcValue, pulses_total);
+  } else if (sensorTriggered && adcValue > ADC_THRESHOLD_HIGH) {
+    sensorTriggered = false;
   }
-
-  last_isr_us = now;
-
-  pulses_total++;
-  pulses_hour++;
-  pending_pulses++;
-
-  red_pulse_pending = true;
 }
 
 //
@@ -212,9 +218,6 @@ void mqttConnect() {
       Serial.print("MQTT connected\r\n");
       mqtt.publish(MQTT_TOPIC_AVAIL, "online", true);
       mqttOnline = true;
-
-      int s = digitalRead(PIN_SENSOR);
-      mqtt.publish(MQTT_TOPIC_GPIO2, (s == LOW) ? "LOW" : "HIGH", true);
     } else {
       Serial.printf("MQTT connect failed rc=%d -> retry\r\n", mqtt.state());
       delay(MQTT_RETRY_DELAY_MS);
@@ -243,21 +246,16 @@ void publishState(bool force) {
 
   lastPublishMs = now;
 
-  uint32_t t, h;
-  noInterrupts();
-  t = pulses_total;
-  h = pulses_hour;
-  interrupts();
-
-  float total_kwh = total_kwh_offset + pulsesToKwh(t);
-  float hour_kwh  = pulsesToKwh(h);
+  float total_kwh = total_kwh_offset + pulsesToKwh(pulses_total);
+  float hour_kwh  = pulsesToKwh(pulses_hour);
 
   char payload[256];
   snprintf(payload, sizeof(payload),
            "{\"total_kwh\":%.3f,\"hour_kwh\":%.3f,"
            "\"pulses_total\":%u,\"pulses_hour\":%u,"
-           "\"rssi\":%d}",
-           total_kwh, hour_kwh, t, h, WiFi.RSSI());
+           "\"adc\":%u,\"rssi\":%d}",
+           total_kwh, hour_kwh, pulses_total, pulses_hour,
+           adcValue, WiFi.RSSI());
 
   if (mqtt.connected()) {
     bool ok = mqtt.publish(MQTT_TOPIC_STATE, payload, true);
@@ -277,38 +275,13 @@ void publishState(bool force) {
 
 //
 // ============================================================
-// ===================== GPIO2 State ==========================
-// ============================================================
-//
-
-void handleGpio2Change() {
-  int s = digitalRead(PIN_SENSOR);
-  if (s != last_gpio_state) {
-    last_gpio_state = s;
-
-    Serial.printf("GPIO2 state=%s\r\n", (s == LOW) ? "LOW" : "HIGH");
-
-    if (mqtt.connected()) {
-      bool ok = mqtt.publish(MQTT_TOPIC_GPIO2, (s == LOW) ? "LOW" : "HIGH", true);
-      Serial.printf("MQTT publish -> %s\r\n", MQTT_TOPIC_GPIO2);
-      Serial.printf("Payload: %s\r\n", (s == LOW) ? "LOW" : "HIGH");
-      Serial.printf("Result: %s\r\n\r\n", ok ? "OK" : "FAILED");
-    }
-  }
-}
-
-//
-// ============================================================
 // ===================== LED ==================================
 // ============================================================
 //
 
 void updateStatusLed() {
   if (red_pulse_pending) {
-    noInterrupts();
     red_pulse_pending = false;
-    interrupts();
-
     redActive   = true;
     redStartMs  = millis();
   }
@@ -344,14 +317,8 @@ void updateDisplay() {
   if ((uint32_t)(now - lastDisplayMs) < DISPLAY_INTERVAL_MS) return;
   lastDisplayMs = now;
 
-  uint32_t t, h;
-  noInterrupts();
-  t = pulses_total;
-  h = pulses_hour;
-  interrupts();
-
-  float total_kwh = total_kwh_offset + pulsesToKwh(t);
-  float hour_kwh  = pulsesToKwh(h);
+  float total_kwh = total_kwh_offset + pulsesToKwh(pulses_total);
+  float hour_kwh  = pulsesToKwh(pulses_hour);
 
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
@@ -387,9 +354,9 @@ void updateDisplay() {
   display.setCursor(0, 46);
   display.printf("Std: %.3f kWh", hour_kwh);
 
-  // --- Row 5: Pulse count ---
+  // --- Row 5: ADC-Wert + Schwellwert-Status ---
   display.setCursor(0, 56);
-  display.printf("Pulse: %u", t);
+  display.printf("ADC:%4u P:%u", adcValue, pulses_total);
 
   display.display();
 }
@@ -405,12 +372,11 @@ void handleBootButton() {
   bool btn = digitalRead(PIN_BUTTON);
 
   if (lastBtn && !btn) {
-    noInterrupts();
     pulses_total     = 0;
     pulses_hour      = 0;
     pending_pulses   = 0;
     red_pulse_pending = false;
-    interrupts();
+    sensorTriggered  = false;
 
     total_kwh_offset = 0.0f;
     hourStartMs      = millis();
@@ -438,10 +404,11 @@ void setup() {
 
   Serial.print("\r\n=== GasCounter WiFi MQTT ===\r\n");
 
-  pinMode(PIN_SENSOR, INPUT_PULLUP);
-  pinMode(PIN_BUTTON, INPUT_PULLUP);
+  // Sensor als analoger Eingang (kein pullup, kein Interrupt)
+  pinMode(PIN_SENSOR, INPUT);
+  analogSetAttenuation(ADC_11db);  // 0–3.3V Messbereich
 
-  attachInterrupt(digitalPinToInterrupt(PIN_SENSOR), isrPulse, FALLING);
+  pinMode(PIN_BUTTON, INPUT_PULLUP);
 
   strip.begin();
   strip.setBrightness(LED_BRIGHTNESS);
@@ -474,8 +441,8 @@ void setup() {
   wifiConnect();
   mqttConnect();
 
-  last_gpio_state = digitalRead(PIN_SENSOR);
-  Serial.printf("GPIO2 state=%s\r\n", (last_gpio_state == LOW) ? "LOW" : "HIGH");
+  Serial.printf("ADC Schwellwert LOW=%u HIGH=%u\r\n",
+                ADC_THRESHOLD_LOW, ADC_THRESHOLD_HIGH);
 
   publishState(true);
 }
@@ -487,9 +454,9 @@ void setup() {
 //
 
 void loop() {
+  handleSensorAnalog();
   updateStatusLed();
   updateDisplay();
-  handleGpio2Change();
   handleBootButton();
 
   if (WiFi.status() != WL_CONNECTED) {
@@ -504,9 +471,7 @@ void loop() {
   mqtt.loop();
 
   if (pending_pulses) {
-    noInterrupts();
     pending_pulses = 0;
-    interrupts();
     publishState(true);
   }
 
@@ -515,9 +480,7 @@ void loop() {
   uint32_t now = millis();
   if ((uint32_t)(now - hourStartMs) >= HOUR_INTERVAL_MS) {
     hourStartMs += HOUR_INTERVAL_MS;
-    noInterrupts();
     pulses_hour = 0;
-    interrupts();
 
     Serial.print("Hour rollover -> reset hour pulses\r\n");
     publishState(true);
