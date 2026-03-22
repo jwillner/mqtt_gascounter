@@ -6,6 +6,8 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
 
 //
 // ============================================================
@@ -24,12 +26,14 @@ static const uint16_t MQTT_PORT = 1883;
 static const char* MQTT_CLIENT_ID   = "gas_counter_esp32c6";
 static const char* MQTT_TOPIC_STATE = "gas_counter/state";
 static const char* MQTT_TOPIC_AVAIL = "gas_counter/availability";
+static const char* MQTT_TOPIC_TEMP  = "gas_counter/temperature";
 
 // -------- Hardware ----------
 static const uint8_t PIN_SENSOR   = 3;        // Sensor input (analog)
 static const uint8_t PIN_NEOPIXEL = 8;        // WS2812 data pin
 static const uint8_t PIN_BUTTON   = BOOT_PIN; // BOOT button
 static const uint8_t NUM_PIXELS   = 1;
+static const uint8_t PIN_DS18B20  = 4;        // DS18B20 temperature sensor
 
 // -------- OLED ----------
 static const uint8_t OLED_SDA     = 0;
@@ -94,6 +98,12 @@ WiFiClient wifiClient;
 PubSubClient mqtt(wifiClient);
 Preferences prefs;
 
+OneWire oneWire(PIN_DS18B20);
+DallasTemperature tempSensor(&oneWire);
+static const uint8_t MAX_TEMP_SENSORS = 3;
+float temperaturesC[MAX_TEMP_SENSORS];
+uint8_t numTempSensors = 0;
+
 Adafruit_NeoPixel strip(NUM_PIXELS, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
@@ -147,6 +157,21 @@ static inline float mWhToKWh(uint32_t mwh) {
 static inline void setLed(uint8_t r, uint8_t g, uint8_t b) {
   strip.setPixelColor(0, strip.Color(r, g, b));
   strip.show();
+}
+
+//
+// ============================================================
+// ===================== TEMPERATURE ==========================
+// ============================================================
+
+void readTemperature() {
+  tempSensor.requestTemperatures();
+  for (uint8_t i = 0; i < numTempSensors; i++) {
+    float t = tempSensor.getTempCByIndex(i);
+    if (t != DEVICE_DISCONNECTED_C) {
+      temperaturesC[i] = t;
+    }
+  }
 }
 
 //
@@ -249,13 +274,18 @@ void publishState(bool force) {
   float total_kwh = total_kwh_offset + pulsesToKwh(pulses_total);
   float hour_kwh  = pulsesToKwh(pulses_hour);
 
-  char payload[256];
-  snprintf(payload, sizeof(payload),
+  char payload[320];
+  int len = snprintf(payload, sizeof(payload),
            "{\"total_kwh\":%.3f,\"hour_kwh\":%.3f,"
            "\"pulses_total\":%u,\"pulses_hour\":%u,"
-           "\"adc\":%u,\"rssi\":%d}",
+           "\"adc\":%u,\"rssi\":%d",
            total_kwh, hour_kwh, pulses_total, pulses_hour,
            adcValue, WiFi.RSSI());
+  for (uint8_t i = 0; i < numTempSensors; i++) {
+    len += snprintf(payload + len, sizeof(payload) - len,
+                    ",\"temperature_%u\":%.2f", i, temperaturesC[i]);
+  }
+  snprintf(payload + len, sizeof(payload) - len, "}");
 
   if (mqtt.connected()) {
     bool ok = mqtt.publish(MQTT_TOPIC_STATE, payload, true);
@@ -354,9 +384,17 @@ void updateDisplay() {
   display.setCursor(0, 46);
   display.printf("Std: %.3f kWh", hour_kwh);
 
-  // --- Row 5: ADC-Wert + Schwellwert-Status ---
+  // --- Row 5: Temperaturen ---
   display.setCursor(0, 56);
-  display.printf("ADC:%4u P:%u", adcValue, pulses_total);
+  if (numTempSensors == 1) {
+    display.printf("ADC:%4u %.1fC", adcValue, temperaturesC[0]);
+  } else if (numTempSensors == 2) {
+    display.printf("%.1f  %.1fC", temperaturesC[0], temperaturesC[1]);
+  } else if (numTempSensors >= 3) {
+    display.printf("%.1f %.1f %.1fC", temperaturesC[0], temperaturesC[1], temperaturesC[2]);
+  } else {
+    display.printf("ADC:%4u P:%u", adcValue, pulses_total);
+  }
 
   display.display();
 }
@@ -410,6 +448,11 @@ void setup() {
 
   pinMode(PIN_BUTTON, INPUT_PULLUP);
 
+  tempSensor.begin();
+  numTempSensors = min((uint8_t)tempSensor.getDeviceCount(), MAX_TEMP_SENSORS);
+  for (uint8_t i = 0; i < MAX_TEMP_SENSORS; i++) temperaturesC[i] = -127.0f;
+  Serial.printf("DS18B20 Sensoren gefunden: %u\r\n", numTempSensors);
+
   strip.begin();
   strip.setBrightness(LED_BRIGHTNESS);
   setLed(LED_OFF_R, LED_OFF_G, LED_OFF_B);
@@ -455,6 +498,7 @@ void setup() {
 
 void loop() {
   handleSensorAnalog();
+  readTemperature();
   updateStatusLed();
   updateDisplay();
   handleBootButton();
